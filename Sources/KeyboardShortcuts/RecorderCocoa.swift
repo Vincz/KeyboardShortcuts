@@ -29,6 +29,7 @@ extension KeyboardShortcuts {
 		private let minimumWidth: Double = 130
 		private var eventMonitor: LocalEventMonitor?
 		private let onChange: ((_ shortcut: Shortcut?) -> Void)?
+        private let onFailed: ((_ shortcut: Shortcut?) -> Void)?
 		private var observer: NSObjectProtocol?
 		private var canBecomeKey = false
 
@@ -37,13 +38,13 @@ extension KeyboardShortcuts {
 
 		Can be dynamically changed at any time.
 		*/
-		public var shortcutName: Name {
+        public var shortcutName: Name? = nil {
 			didSet {
-				guard shortcutName != oldValue else {
+				guard shortcutName != nil && shortcutName != oldValue else {
 					return
 				}
 
-				setStringValue(name: shortcutName)
+				setStringValue(name: shortcutName!)
 
 				// This doesn't seem to be needed anymore, but I cannot test on older OS versions, so keeping it just in case.
 				if #unavailable(macOS 12) {
@@ -55,6 +56,26 @@ extension KeyboardShortcuts {
 			}
 		}
 
+        /**
+        The shortcut initial value (used for the string representation)
+         
+        Can be dynamically changed at any time.
+        */
+        public var shortcut: Shortcut? = nil {
+            didSet {                
+                print("ok with \(shortcut)")
+                setStringValue(shortcut: shortcut)
+                
+                // This doesn't seem to be needed anymore, but I cannot test on older OS versions, so keeping it just in case.
+                if #unavailable(macOS 12) {
+                    DispatchQueue.main.async { [self] in
+                        // Prevents the placeholder from being cut off.
+                        blur()
+                    }
+                }
+            }
+        }
+        
 		/// :nodoc:
 		override public var canBecomeKeyView: Bool { canBecomeKey }
 
@@ -80,12 +101,15 @@ extension KeyboardShortcuts {
 		*/
 		public required init(
 			for name: Name,
-			onChange: ((_ shortcut: Shortcut?) -> Void)? = nil
+			onChange: ((_ shortcut: Shortcut?) -> Void)? = nil,
+            onFailed: ((_ shortcut: Shortcut?) -> Void)? = nil
 		) {
 			self.shortcutName = name
 			self.onChange = onChange
-
-			super.init(frame: .zero)
+            self.onFailed = onFailed
+            
+            super.init(frame: .zero)
+			
 			self.delegate = self
 			self.placeholderString = "record_shortcut".localized
 			self.alignment = .center
@@ -103,18 +127,55 @@ extension KeyboardShortcuts {
 			setUpEvents()
 		}
 
+        public required init(
+            for shortcut: Shortcut?,
+            onChange: ((_ shortcut: Shortcut?) -> Void)? = nil,
+            onFailed: ((_ shortcut: Shortcut?) -> Void)? = nil
+        ) {
+            self.shortcut = shortcut
+            self.onChange = onChange
+            self.onFailed = onFailed
+            
+            super.init(frame: .zero)
+            
+            self.delegate = self
+            self.placeholderString = "record_shortcut".localized
+            self.alignment = .center
+            (cell as? NSSearchFieldCell)?.searchButtonCell = nil
+            
+            self.wantsLayer = true
+            setContentHuggingPriority(.defaultHigh, for: .vertical)
+            setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            
+            // Hide the cancel button when not showing the shortcut so the placeholder text is properly centered. Must be last.
+            self.cancelButton = (cell as? NSSearchFieldCell)?.cancelButtonCell
+            
+            if shortcut != nil {
+                setStringValue(shortcut: shortcut!)
+            }
+            
+            setUpEvents()
+        }
+        
 		@available(*, unavailable)
 		public required init?(coder: NSCoder) {
 			fatalError("init(coder:) has not been implemented")
 		}
 
 		private func setStringValue(name: KeyboardShortcuts.Name) {
-			stringValue = getShortcut(for: shortcutName).map { "\($0)" } ?? ""
+			stringValue = getShortcut(for: name).map { "\($0)" } ?? ""
 
 			// If `stringValue` is empty, hide the cancel button to let the placeholder center.
 			showsCancelButton = !stringValue.isEmpty
 		}
 
+        private func setStringValue(shortcut: Shortcut?) {
+            stringValue = shortcut == nil ? "" : "\(shortcut!)"
+            
+            // If `stringValue` is empty, hide the cancel button to let the placeholder center.
+            showsCancelButton = !stringValue.isEmpty
+        }
+        
 		private func setUpEvents() {
 			observer = NotificationCenter.default.addObserver(forName: .shortcutByNameDidChange, object: nil, queue: nil) { [weak self] notification in
 				guard
@@ -249,15 +310,20 @@ extension KeyboardShortcuts {
 				}
 
 				guard !shortcut.isTakenBySystem else {
-					self.blur()
+					
 
-					NSAlert.showModal(
-						for: self.window,
-						title: "keyboard_shortcut_used_by_system".localized,
-						// TODO: Add button to offer to open the relevant system settings pane for the user.
-						message: "keyboard_shortcuts_can_be_changed".localized
-					)
-
+                    if onFailed != nil {
+                        onFailed?(shortcut)
+                        return nil
+                    }
+                    
+                    self.blur()
+                    NSAlert.showModal(
+                        for: self.window,
+                        title: "keyboard_shortcut_used_by_system".localized,
+                        // TODO: Add button to offer to open the relevant system settings pane for the user.
+                        message: "keyboard_shortcuts_can_be_changed".localized
+                    )
 					self.focus()
 
 					return nil
@@ -276,7 +342,9 @@ extension KeyboardShortcuts {
 		}
 
 		private func saveShortcut(_ shortcut: Shortcut?) {
-			setShortcut(shortcut, for: shortcutName)
+            if shortcutName != nil {
+                setShortcut(shortcut, for: shortcutName!)
+            }
 			onChange?(shortcut)
 		}
 	}
